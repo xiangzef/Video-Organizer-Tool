@@ -11,6 +11,13 @@ import sys
 from pathlib import Path
 import time
 
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+    HAS_TKINTER = True
+except ImportError:
+    HAS_TKINTER = False
+
 # 常见视频文件扩展名
 VIDEO_EXTENSIONS = {
     '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', 
@@ -34,7 +41,7 @@ def find_video_files(directory):
 
 def move_video_to_root(directory, root_path):
     """将视频文件移动到一级目录"""
-    root = directory
+    root = root_path[0]  # 文件所在的原始子目录
     file = root_path[1]
     source_path = os.path.join(root, file)
     target_path = os.path.join(directory, file)
@@ -159,6 +166,16 @@ def process_directory(directory):
         for folder, error in failed_deletes:
             print(f"  - {os.path.relpath(folder, directory)}: {error}")
 
+def browse_directory_dialog():
+    """使用 tkinter 弹出系统文件夹选择框"""
+    root = tk.Tk()
+    root.withdraw()           # 隐藏主窗口
+    root.attributes('-topmost', True)  # 确保对话框在最前面
+    folder = filedialog.askdirectory(title="选择要整理的视频目录")
+    root.destroy()
+    return folder if folder else None
+
+
 def get_directory_from_user():
     """获取用户输入的目录"""
     print("\n" + "=" * 50)
@@ -172,22 +189,29 @@ def get_directory_from_user():
     
     while True:
         try:
-            input("\n按 Enter 键选择目录（或输入 'exit' 退出）...")
-            
-            # 在Windows上使用简单的目录输入
-            print("\n请输入目录路径（或拖拽文件夹到终端窗口）:")
-            path = input("目录: ").strip()
-            
-            if path.lower() == 'exit':
-                return None
-            
-            # 处理拖拽路径（可能包含引号）
-            path = path.strip('"\'')
-            
-            if not path:
-                print("请输入有效的目录路径！")
-                continue
+            if HAS_TKINTER:
+                print("\n正在打开文件夹选择窗口...")
+                path = browse_directory_dialog()
+                if path is None:
+                    cont = input("未选择目录，输入 'exit' 退出，或按 Enter 重新选择: ").strip().lower()
+                    if cont == 'exit':
+                        return None
+                    continue
+            else:
+                # 降级：手动输入
+                print("\n请输入目录路径（或拖拽文件夹到终端窗口）:")
+                path = input("目录: ").strip()
                 
+                if path.lower() == 'exit':
+                    return None
+                
+                # 处理拖拽路径（可能包含引号）
+                path = path.strip('"\'')
+                
+                if not path:
+                    print("请输入有效的目录路径！")
+                    continue
+            
             if not os.path.exists(path):
                 print(f"目录不存在: {path}")
                 continue
