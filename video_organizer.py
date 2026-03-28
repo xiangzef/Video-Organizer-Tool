@@ -95,6 +95,69 @@ def get_unique_folders(video_files):
         folders.add(root)
     return sorted(folders, key=len, reverse=True)  # 从最深层的文件夹开始
 
+
+def folder_contains_video(folder_path):
+    """检查文件夹（含子文件夹）中是否包含视频文件"""
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            if is_video_file(file):
+                return True
+    return False
+
+
+def find_folders_without_videos(directory):
+    """查找指定目录下所有不含视频文件的子文件夹（不包含目录本身）"""
+    empty_video_folders = []
+    for root, dirs, files in os.walk(directory, topdown=False):
+        if root == directory:
+            continue
+        # 只检查当前层（不递归），因为 os.walk topdown=False 已从底部遍历
+        has_video = any(is_video_file(f) for f in files)
+        if not has_video:
+            empty_video_folders.append(root)
+    # 按路径深度从深到浅排序，保证先删子目录再删父目录
+    return sorted(empty_video_folders, key=len, reverse=True)
+
+
+def delete_folders_without_videos(directory):
+    """删除指定目录下所有不含视频文件的子文件夹"""
+    print(f"\n正在扫描目录: {directory}")
+    print("=" * 50)
+
+    candidates = find_folders_without_videos(directory)
+
+    if not candidates:
+        print("未找到不含视频文件的文件夹。")
+        return
+
+    print(f"找到 {len(candidates)} 个不含视频文件的文件夹：")
+    for folder in candidates:
+        print(f"  {os.path.relpath(folder, directory)}")
+
+    confirm = input("\n确认删除以上文件夹？(y/n): ").strip().lower()
+    if confirm != 'y':
+        print("操作已取消。")
+        return
+
+    deleted, failed = [], []
+    for folder in candidates:
+        # 父目录可能已被 shutil.rmtree 删除，跳过不存在的
+        if not os.path.exists(folder):
+            continue
+        if folder == directory:
+            continue
+        try:
+            import shutil as _shutil
+            _shutil.rmtree(folder)
+            print(f"  ✓ 已删除: {os.path.relpath(folder, directory)}")
+            deleted.append(folder)
+        except Exception as e:
+            print(f"  ✗ 删除失败 ({os.path.relpath(folder, directory)}): {e}")
+            failed.append((folder, str(e)))
+
+    print("\n" + "=" * 50)
+    print(f"删除完成！成功: {len(deleted)}，失败: {len(failed)}")
+
 def process_directory(directory):
     """处理指定目录"""
     print(f"\n正在处理目录: {directory}")
@@ -231,31 +294,47 @@ def get_directory_from_user():
 
 def main():
     """主函数"""
-    print("视频文件整理器 v1.0")
+    print("视频文件整理器 v1.1")
     print("按 Ctrl+C 退出程序\n")
     
     try:
         while True:
-            directory = get_directory_from_user()
-            
-            if directory is None:
+            print("\n" + "=" * 50)
+            print("请选择功能：")
+            print("  1. 整理视频文件（将子目录视频移到一级目录）")
+            print("  2. 删除不含视频文件的文件夹")
+            print("  0. 退出")
+            print("=" * 50)
+            choice = input("请输入功能编号: ").strip()
+
+            if choice == '0':
                 print("\n感谢使用，再见！")
                 break
-                
-            # 确认操作
-            print(f"\n你选择的目录是: {directory}")
-            confirm = input("确认开始整理？(y/n): ").strip().lower()
-            
-            if confirm != 'y':
-                print("操作已取消")
+
+            if choice not in ('1', '2'):
+                print("无效输入，请重新选择。")
                 continue
-                
-            # 处理目录
-            process_directory(directory)
-            
+
+            directory = get_directory_from_user()
+            if directory is None:
+                continue
+
+            if choice == '1':
+                # 确认操作
+                print(f"\n你选择的目录是: {directory}")
+                confirm = input("确认开始整理？(y/n): ").strip().lower()
+                if confirm != 'y':
+                    print("操作已取消")
+                    continue
+                process_directory(directory)
+
+
+            elif choice == '2':
+                delete_folders_without_videos(directory)
+
             # 询问是否继续
             print("\n" + "=" * 50)
-            cont = input("是否处理其他目录？(y/n): ").strip().lower()
+            cont = input("是否继续操作？(y/n): ").strip().lower()
             if cont != 'y':
                 print("\n感谢使用，再见！")
                 break

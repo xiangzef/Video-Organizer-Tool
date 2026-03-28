@@ -51,7 +51,8 @@ class VideoOrganizerGUI:
         desc_text = """功能说明：
 1. 递归查找指定目录下的所有视频文件
 2. 将视频文件移动到一级目录
-3. 删除空文件夹（仅当文件夹中无任何文件时）"""
+3. 删除空文件夹（仅当文件夹中无任何文件时）
+4. 批量删除不含视频文件的文件夹"""
         
         desc_label = tk.Label(
             self.root, 
@@ -150,6 +151,19 @@ class VideoOrganizerGUI:
         )
         self.start_btn.pack(side=tk.LEFT, padx=5)
         
+        self.delete_empty_btn = tk.Button(
+            button_frame,
+            text="删除无视频文件夹",
+            command=self.start_delete_empty_folders,
+            font=("Arial", 11, "bold"),
+            bg="#e67e22",
+            fg="white",
+            padx=20,
+            pady=5,
+            state='disabled'
+        )
+        self.delete_empty_btn.pack(side=tk.LEFT, padx=5)
+        
         clear_btn = tk.Button(
             button_frame,
             text="清空日志",
@@ -179,6 +193,7 @@ class VideoOrganizerGUI:
         if directory:
             self.dir_var.set(directory)
             self.start_btn.config(state='normal')
+            self.delete_empty_btn.config(state='normal')
             self.log_message(f"选择的目录: {directory}")
     
     def log_message(self, message):
@@ -341,6 +356,104 @@ class VideoOrganizerGUI:
             self.start_btn.config(state='normal', text="开始整理")
             self.status_var.set("就绪")
     
+    def folder_contains_video(self, folder_path):
+        """检查文件夹（含子文件夹）中是否包含视频文件"""
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if self.is_video_file(file):
+                    return True
+        return False
+
+    def find_folders_without_videos(self, directory):
+        """查找指定目录下所有不含视频文件的子文件夹"""
+        result = []
+        for root, dirs, files in os.walk(directory, topdown=False):
+            if root == directory:
+                continue
+            has_video = any(self.is_video_file(f) for f in files)
+            if not has_video:
+                result.append(root)
+        return sorted(result, key=len, reverse=True)
+
+    def process_delete_empty_folders(self):
+        """删除不含视频文件的文件夹（在线程中执行）"""
+        directory = self.dir_var.get()
+
+        if not directory or not os.path.exists(directory):
+            messagebox.showerror("错误", "请选择有效的目录！")
+            return
+
+        try:
+            self.processing = True
+            self.delete_empty_btn.config(state='disabled', text="处理中...")
+            self.start_btn.config(state='disabled')
+
+            self.log_message(f"开始扫描目录: {directory}")
+            self.status_var.set("正在扫描无视频文件夹...")
+
+            candidates = self.find_folders_without_videos(directory)
+
+            if not candidates:
+                self.log_message("未找到不含视频文件的文件夹。")
+                messagebox.showinfo("提示", "未找到不含视频文件的文件夹！")
+                return
+
+            total = len(candidates)
+            self.log_message(f"找到 {total} 个不含视频文件的文件夹")
+            for folder in candidates:
+                self.log_message(f"  - {os.path.relpath(folder, directory)}")
+
+            # 弹确认框（在主线程中需通过 after 调用，这里直接用 messagebox）
+            confirm = messagebox.askyesno(
+                "确认删除",
+                f"即将删除 {total} 个不含视频文件的文件夹（包含其中所有内容）。\n\n此操作不可恢复，确认继续？"
+            )
+            if not confirm:
+                self.log_message("操作已取消。")
+                return
+
+            self.status_var.set("正在删除...")
+            deleted, failed = [], []
+
+            for i, folder in enumerate(candidates, 1):
+                self.progress_var.set(i / total * 100)
+                if not os.path.exists(folder):
+                    continue
+                if folder == directory:
+                    continue
+                try:
+                    shutil.rmtree(folder)
+                    rel = os.path.relpath(folder, directory)
+                    self.log_message(f"  ✓ 已删除: {rel}")
+                    deleted.append(folder)
+                except Exception as e:
+                    rel = os.path.relpath(folder, directory)
+                    self.log_message(f"  ✗ 删除失败 ({rel}): {e}")
+                    failed.append((folder, str(e)))
+
+            self.progress_var.set(100)
+            self.status_var.set("处理完成")
+            self.log_message("=" * 50)
+            self.log_message(f"删除完成！成功: {len(deleted)}，失败: {len(failed)}")
+            messagebox.showinfo("完成", f"删除完成！\n\n成功删除: {len(deleted)} 个文件夹\n失败: {len(failed)} 个")
+
+        except Exception as e:
+            self.log_message(f"处理过程中发生错误: {str(e)}")
+            messagebox.showerror("错误", f"处理过程中发生错误:\n{str(e)}")
+        finally:
+            self.processing = False
+            self.delete_empty_btn.config(state='normal', text="删除无视频文件夹")
+            self.start_btn.config(state='normal')
+            self.status_var.set("就绪")
+
+    def start_delete_empty_folders(self):
+        """在独立线程中启动删除操作"""
+        if self.processing:
+            return
+        thread = threading.Thread(target=self.process_delete_empty_folders)
+        thread.daemon = True
+        thread.start()
+
     def start_processing(self):
         """在单独的线程中开始处理"""
         if self.processing:
