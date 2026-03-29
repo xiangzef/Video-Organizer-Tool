@@ -52,7 +52,8 @@ class VideoOrganizerGUI:
 1. 递归查找指定目录下的所有视频文件
 2. 将视频文件移动到一级目录
 3. 删除空文件夹（仅当文件夹中无任何文件时）
-4. 批量删除不含视频文件的文件夹"""
+4. 批量删除不含视频文件的文件夹
+5. 整理单片文件夹（仅含1个视频且无子文件夹的一级目录）"""
         
         desc_label = tk.Label(
             self.root, 
@@ -163,6 +164,19 @@ class VideoOrganizerGUI:
             state='disabled'
         )
         self.delete_empty_btn.pack(side=tk.LEFT, padx=5)
+
+        self.single_video_btn = tk.Button(
+            button_frame,
+            text="整理单片文件夹",
+            command=self.start_move_single_video_folders,
+            font=("Arial", 11, "bold"),
+            bg="#8e44ad",
+            fg="white",
+            padx=20,
+            pady=5,
+            state='disabled'
+        )
+        self.single_video_btn.pack(side=tk.LEFT, padx=5)
         
         clear_btn = tk.Button(
             button_frame,
@@ -194,6 +208,7 @@ class VideoOrganizerGUI:
             self.dir_var.set(directory)
             self.start_btn.config(state='normal')
             self.delete_empty_btn.config(state='normal')
+            self.single_video_btn.config(state='normal')
             self.log_message(f"选择的目录: {directory}")
     
     def log_message(self, message):
@@ -451,6 +466,130 @@ class VideoOrganizerGUI:
         if self.processing:
             return
         thread = threading.Thread(target=self.process_delete_empty_folders)
+        thread.daemon = True
+        thread.start()
+
+    def analyze_single_video_folders(self, directory):
+        """
+        分析根目录下的一级子文件夹，找出「仅含1个视频文件且无子文件夹」的文件夹。
+        返回列表，每项为 (folder_path, video_filename)
+        """
+        results = []
+        try:
+            entries = list(os.scandir(directory))
+        except Exception:
+            return results
+
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            folder_path = entry.path
+            try:
+                children = list(os.scandir(folder_path))
+            except Exception:
+                continue
+
+            # 有子文件夹 → 跳过
+            if any(c.is_dir() for c in children):
+                continue
+
+            # 统计视频文件
+            videos = [c.name for c in children if c.is_file() and self.is_video_file(c.name)]
+
+            if len(videos) == 1:
+                results.append((folder_path, videos[0]))
+
+        return results
+
+    def process_move_single_video_folders(self):
+        """整理单片文件夹（在线程中执行）"""
+        directory = self.dir_var.get()
+
+        if not directory or not os.path.exists(directory):
+            messagebox.showerror("错误", "请选择有效的目录！")
+            return
+
+        try:
+            self.processing = True
+            self.single_video_btn.config(state='disabled', text="处理中...")
+            self.start_btn.config(state='disabled')
+            self.delete_empty_btn.config(state='disabled')
+
+            self.log_message(f"开始扫描目录: {directory}")
+            self.status_var.set("正在扫描单片文件夹...")
+
+            candidates = self.analyze_single_video_folders(directory)
+
+            if not candidates:
+                self.log_message("未找到符合条件的文件夹（一级子文件夹仅含1个视频且无子文件夹）。")
+                messagebox.showinfo("提示", "未找到符合条件的单片文件夹！")
+                return
+
+            total = len(candidates)
+            self.log_message(f"找到 {total} 个符合条件的文件夹：")
+            for folder, video in candidates:
+                rel = os.path.relpath(folder, directory)
+                self.log_message(f"  {rel}  →  {video}")
+
+            confirm = messagebox.askyesno(
+                "确认整理",
+                f"即将把 {total} 个文件夹中的视频移到根目录，并删除对应文件夹。\n\n此操作不可恢复，确认继续？"
+            )
+            if not confirm:
+                self.log_message("操作已取消。")
+                return
+
+            self.status_var.set("正在移动...")
+            moved, failed = [], []
+
+            for i, (folder, video) in enumerate(candidates, 1):
+                self.progress_var.set(i / total * 100)
+
+                src = os.path.join(folder, video)
+                dst = os.path.join(directory, video)
+
+                # 目标重名处理
+                if os.path.exists(dst):
+                    base, ext = os.path.splitext(video)
+                    counter = 1
+                    while os.path.exists(dst):
+                        dst = os.path.join(directory, f"{base}_{counter}{ext}")
+                        counter += 1
+
+                rel_folder = os.path.relpath(folder, directory)
+                try:
+                    shutil.move(src, dst)
+                    self.log_message(f"  ✓ 移动: {video}  (从 {rel_folder})")
+                    # 删除现在应为空的文件夹
+                    if not os.listdir(folder):
+                        os.rmdir(folder)
+                        self.log_message(f"  ✓ 删除: {rel_folder}")
+                    moved.append(video)
+                except Exception as e:
+                    self.log_message(f"  ✗ 失败 ({video}): {e}")
+                    failed.append((video, str(e)))
+
+            self.progress_var.set(100)
+            self.status_var.set("处理完成")
+            self.log_message("=" * 50)
+            self.log_message(f"整理完成！成功: {len(moved)}，失败: {len(failed)}")
+            messagebox.showinfo("完成", f"整理完成！\n\n成功移动: {len(moved)} 个视频\n失败: {len(failed)} 个")
+
+        except Exception as e:
+            self.log_message(f"处理过程中发生错误: {str(e)}")
+            messagebox.showerror("错误", f"处理过程中发生错误:\n{str(e)}")
+        finally:
+            self.processing = False
+            self.single_video_btn.config(state='normal', text="整理单片文件夹")
+            self.start_btn.config(state='normal')
+            self.delete_empty_btn.config(state='normal')
+            self.status_var.set("就绪")
+
+    def start_move_single_video_folders(self):
+        """在独立线程中启动整理单片文件夹操作"""
+        if self.processing:
+            return
+        thread = threading.Thread(target=self.process_move_single_video_folders)
         thread.daemon = True
         thread.start()
 

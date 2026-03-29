@@ -119,6 +119,96 @@ def find_folders_without_videos(directory):
     return sorted(empty_video_folders, key=len, reverse=True)
 
 
+def analyze_single_video_folders(directory):
+    """
+    分析根目录下的一级子文件夹，找出「仅含1个视频文件且无子文件夹」的文件夹。
+    返回列表，每项为 (folder_path, video_filename)
+    """
+    results = []
+    try:
+        entries = list(os.scandir(directory))
+    except Exception:
+        return results
+
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        folder_path = entry.path
+
+        # 扫描该一级文件夹的直接内容
+        try:
+            children = list(os.scandir(folder_path))
+        except Exception:
+            continue
+
+        # 有子文件夹 → 跳过
+        has_subdir = any(c.is_dir() for c in children)
+        if has_subdir:
+            continue
+
+        # 统计视频文件
+        video_files = [c.name for c in children if c.is_file() and is_video_file(c.name)]
+
+        # 恰好1个视频文件
+        if len(video_files) == 1:
+            results.append((folder_path, video_files[0]))
+
+    return results
+
+
+def move_single_video_folders(directory):
+    """
+    将一级子文件夹中「仅含1个视频文件且无子文件夹」的视频移到根目录，
+    然后删除空文件夹。
+    """
+    print(f"\n正在扫描目录: {directory}")
+    print("=" * 50)
+
+    candidates = analyze_single_video_folders(directory)
+
+    if not candidates:
+        print("未找到符合条件的文件夹（一级子文件夹中仅含1个视频且无子文件夹）。")
+        return
+
+    print(f"找到 {len(candidates)} 个符合条件的文件夹：")
+    for folder, video in candidates:
+        rel = os.path.relpath(folder, directory)
+        print(f"  {rel}  →  {video}")
+
+    confirm = input("\n确认移动以上视频并删除对应文件夹？(y/n): ").strip().lower()
+    if confirm != 'y':
+        print("操作已取消。")
+        return
+
+    moved, failed = [], []
+    for folder, video in candidates:
+        src = os.path.join(folder, video)
+        dst = os.path.join(directory, video)
+
+        # 目标重名处理
+        if os.path.exists(dst):
+            base, ext = os.path.splitext(video)
+            counter = 1
+            while os.path.exists(dst):
+                dst = os.path.join(directory, f"{base}_{counter}{ext}")
+                counter += 1
+
+        try:
+            shutil.move(src, dst)
+            print(f"  ✓ 已移动: {video}  (从 {os.path.relpath(folder, directory)})")
+            # 删除现在应为空的文件夹
+            if is_folder_empty(folder):
+                os.rmdir(folder)
+                print(f"  ✓ 已删除: {os.path.relpath(folder, directory)}")
+            moved.append(video)
+        except Exception as e:
+            print(f"  ✗ 失败 ({video}): {e}")
+            failed.append((video, str(e)))
+
+    print("\n" + "=" * 50)
+    print(f"完成！成功移动: {len(moved)}，失败: {len(failed)}")
+
+
 def delete_folders_without_videos(directory):
     """删除指定目录下所有不含视频文件的子文件夹"""
     print(f"\n正在扫描目录: {directory}")
@@ -303,6 +393,7 @@ def main():
             print("请选择功能：")
             print("  1. 整理视频文件（将子目录视频移到一级目录）")
             print("  2. 删除不含视频文件的文件夹")
+            print("  3. 整理单片文件夹（仅含1个视频的一级子文件夹移到根目录）")
             print("  0. 退出")
             print("=" * 50)
             choice = input("请输入功能编号: ").strip()
@@ -311,7 +402,7 @@ def main():
                 print("\n感谢使用，再见！")
                 break
 
-            if choice not in ('1', '2'):
+            if choice not in ('1', '2', '3'):
                 print("无效输入，请重新选择。")
                 continue
 
@@ -331,6 +422,9 @@ def main():
 
             elif choice == '2':
                 delete_folders_without_videos(directory)
+
+            elif choice == '3':
+                move_single_video_folders(directory)
 
             # 询问是否继续
             print("\n" + "=" * 50)
